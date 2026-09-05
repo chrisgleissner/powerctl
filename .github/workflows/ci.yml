@@ -68,8 +68,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check for private addresses, MACs and local state files
-        run: ./scripts/check-repo-clean.sh
+        with:
+          # The history check needs every commit, not just the tip.
+          fetch-depth: 0
+      - name: Working tree and full history
+        run: ./scripts/check-repo-clean.sh --history
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   cli:
     name: CLI smoke test

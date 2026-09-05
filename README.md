@@ -124,7 +124,13 @@ powerctl login --backend tapo     # prompts, never echoes, writes mode 0600
   secret values with `***`.
 
 `powerctl doctor` reports where credentials come from and flags a file with permissions
-that are too wide. Neither the registry nor the credential file is in this repository.
+that are too wide. Neither the registry nor the credential file is in this repository, and
+`scripts/check-repo-clean.sh` fails the build if a private IPv4 address, a MAC address, an
+email address, a token, a WiFi name or key, or one of the local state files reaches the
+working tree or any commit in the history. Documentation values (the RFC 5737 example
+ranges, `AA:BB:CC:DD:EE:FF`, `example.com`) are the only ones allowed. `install.sh`
+installs it as a pre-commit hook, and CI runs it over the full history alongside
+gitleaks.
 
 ## Power cycling a machine
 
@@ -182,8 +188,9 @@ with an existing adapter.
 ## Continuous integration
 
 Every push runs the suite on Python 3.11 and 3.12, lints and format-checks with ruff,
-smoke tests the command, and verifies that no private address, MAC address or local state
-file was committed. Coverage is gated twice, so it cannot silently fall below 95%:
+smoke tests the command, scans for secrets with gitleaks, and verifies that neither the
+working tree nor any commit in the history contains a private address, MAC address, email
+address, token, WiFi name or local state file. Coverage is gated twice, so it cannot silently fall below 95%:
 
 * `pytest` fails the build below 95% through `--cov-fail-under` in `pyproject.toml`. This
   works with no external service.

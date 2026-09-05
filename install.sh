@@ -29,7 +29,7 @@ ln -sfn "$repo_dir/skills/powerctl" "$link"
 echo "==> Installing the pre-commit leak check"
 if [ -d "$repo_dir/.git" ]; then
     hook="$repo_dir/.git/hooks/pre-commit"
-    printf '#!/usr/bin/env bash\nexec "%s/scripts/check-repo-clean.sh"\n' "$repo_dir" > "$hook"
+    printf '#!/usr/bin/env bash\nexec "%s/scripts/check-repo-clean.sh" --history\n' "$repo_dir" > "$hook"
     chmod +x "$hook"
     echo "    $hook"
 fi
