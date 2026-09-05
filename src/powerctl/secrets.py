@@ -61,17 +61,34 @@ def _check_file_mode(path: Path) -> None:
     mode = path.stat().st_mode
     if mode & (stat.S_IRWXG | stat.S_IRWXO):
         raise PowerctlError(
-            f"{path} is readable by group or other; run "
-            f"'chmod 600 {path}' before using it"
+            f"{path} is readable by group or other; run 'chmod 600 {path}' before using it"
         )
 
 
-def load_credentials(backend: str) -> Credentials | None:
-    """Return credentials for ``backend`` from the environment or the file.
+#: Scope names tried after the requested one, for credential files written by
+#: an earlier version that stored the TP-Link account under the adapter name.
+LEGACY_SCOPES = ("kasa", "tapo")
+
+
+def load_credentials(
+    scope: str, *, fallbacks: tuple[str, ...] = LEGACY_SCOPES
+) -> Credentials | None:
+    """Return credentials for ``scope`` from the environment or the file.
 
     Environment variables take precedence over the credential file so that a
-    one-off run can override stored values without editing the file.
+    one-off run can override stored values without editing the file. ``fallbacks``
+    are tried in order afterwards, which is how a TP-Link account stored under
+    the old "kasa" name keeps working for both adapters.
     """
+    for name in (scope, *(f for f in fallbacks if f != scope)):
+        found = _load_one(name)
+        if found is not None:
+            return found
+    return None
+
+
+def _load_one(backend: str) -> Credentials | None:
+    """Load credentials stored under exactly one scope name."""
     upper = backend.upper()
     for user_var, pass_var in zip(_ENV_USER, _ENV_PASS, strict=True):
         username = os.environ.get(user_var.format(B=upper))
@@ -163,10 +180,7 @@ def scrub(obj: object) -> object:
     """Recursively drop credential-like keys and redact known secret values."""
     secret_keys = {"password", "credentials", "credentials_hash", "aes_keys", "token"}
     if isinstance(obj, dict):
-        return {
-            key: ("***" if key in secret_keys else scrub(value))
-            for key, value in obj.items()
-        }
+        return {key: ("***" if key in secret_keys else scrub(value)) for key, value in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [scrub(item) for item in obj]
     if isinstance(obj, str):

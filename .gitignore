@@ -8,3 +8,6 @@ build/
 # Never commit local device or credential state.
 credentials.json
 devices.json
+.coverage
+coverage.xml
+htmlcov/

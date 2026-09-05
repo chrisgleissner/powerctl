@@ -27,7 +27,7 @@ hits=$(printf '%s\n' "$files" | xargs -r grep -nE \
 
 # MAC addresses other than the documentation example.
 hits=$(printf '%s\n' "$files" | xargs -r grep -niE '\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b' -- 2>/dev/null \
-    | grep -viE 'aa:bb:cc:dd:ee:(ff|00)' | grep -v '^scripts/check-repo-clean.sh:')
+    | grep -viE 'aa:bb:cc:dd:ee:(ff|00)|11:22:33:44:55:66' | grep -v '^scripts/check-repo-clean.sh:')
 [ -n "$hits" ] && report "MAC address found:"$'\n'"$hits"
 
 # Local state files must never be tracked.

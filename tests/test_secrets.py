@@ -80,3 +80,75 @@ def test_scrub_drops_credential_keys():
     assert cleaned["credentials"] == "***"
     assert cleaned["nested"][0]["credentials_hash"] == "***"
     assert cleaned["connection_type"] == {"encryption_type": "KLAP"}
+
+
+def test_config_home_follows_the_environment(monkeypatch, tmp_path):
+    from powerctl.secrets import config_home
+
+    monkeypatch.delenv("POWERCTL_HOME", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert config_home() == tmp_path / "powerctl"
+
+    monkeypatch.setenv("POWERCTL_HOME", str(tmp_path / "explicit"))
+    assert config_home() == tmp_path / "explicit"
+
+
+def test_credentials_fall_back_to_another_scope():
+    store_credentials("kasa", "user@example.com", "password123")
+    creds = load_credentials("tplink")
+    assert creds is not None and creds.username == "user@example.com"
+
+
+def test_credentials_of_an_unknown_scope_are_none():
+    store_credentials("kasa", "user@example.com", "password123")
+    assert load_credentials("other", fallbacks=()) is None
+
+
+def test_incomplete_entry_is_an_error():
+    import json
+
+    path = store_credentials("kasa", "user@example.com", "password123")
+    path.write_text(json.dumps({"kasa": {"username": "user@example.com"}}))
+    with pytest.raises(PowerctlError, match="lacks username or password"):
+        load_credentials("kasa", fallbacks=())
+
+
+def test_unreadable_credential_file_is_an_error():
+    path = credentials_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json")
+    path.chmod(0o600)
+    with pytest.raises(PowerctlError, match="cannot read"):
+        load_credentials("kasa")
+
+
+def test_a_corrupt_file_is_replaced_on_write():
+    path = credentials_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json")
+    path.chmod(0o600)
+    store_credentials("kasa", "user@example.com", "password123")
+    assert load_credentials("kasa") is not None
+
+
+def test_forgetting_an_unknown_scope():
+    store_credentials("kasa", "user@example.com", "password123")
+    assert forget_credentials("nothing") is False
+
+
+def test_forgetting_without_a_file():
+    assert forget_credentials("kasa") is False
+
+
+def test_redactor_registers_a_credential_password():
+    from powerctl.secrets import Redactor
+
+    redactor = Redactor()
+    redactor.add_credentials(None)
+    redactor.add_credentials(Credentials("user", "password123"))
+    assert redactor("password123") == "***"
+
+
+def test_scrub_leaves_other_values_alone():
+    assert scrub(42) == 42
+    assert scrub(["a", 1]) == ["a", 1]

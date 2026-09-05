@@ -11,12 +11,11 @@ import stat
 import sys
 from typing import Any
 
-from . import __version__
+from . import __version__, core
 from .backends import all_backends, backend_names
 from .backends.base import DeviceRecord, DeviceStatus
-from . import core
 from .core import DEFAULT_BACKEND, DEFAULT_OFF_SECONDS, Session
-from .errors import EXIT_OK, PowerctlError, UsageError
+from .errors import EXIT_OK, DeviceNotFound, PowerctlError, UsageError
 from .netutil import default_broadcast
 from .registry import registry_path
 from .secrets import (
@@ -47,7 +46,11 @@ def _state(is_on: bool | None) -> str:
     return "on" if is_on else "off"
 
 
-def print_records(records: list[DeviceRecord], registry_protected: set[str]) -> None:
+def print_records(
+    records: list[DeviceRecord],
+    registry_protected: set[str],
+    critical: set[str] | None = None,
+) -> None:
     if not records:
         out("No devices found.")
         return
@@ -58,7 +61,14 @@ def print_records(records: list[DeviceRecord], registry_protected: set[str]) -> 
             flags.append("auth")
         if rec.children:
             flags.append(f"{len(rec.children)} sockets")
-        if any(key.casefold() in registry_protected for key in (rec.host, rec.alias or "")):
+        keys = {
+            key.replace("-", ":").casefold()
+            for key in (rec.host, rec.alias or "", rec.mac or "")
+            if key
+        }
+        if keys & (critical or set()):
+            flags.append("critical")
+        elif keys & registry_protected:
             flags.append("protected")
         if rec.error:
             flags.append(rec.error)
@@ -147,6 +157,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target", default=None, help="broadcast address (default: auto-detected)")
     p.add_argument("--timeout", type=int, default=5, help="discovery timeout in seconds")
     p.add_argument("--no-save", action="store_true", help="do not update the registry")
+    p.add_argument(
+        "--all-devices",
+        action="store_true",
+        help=(
+            "also list devices that answer TP-Link discovery but have no switchable "
+            "outlet, such as mesh nodes and cameras; hidden by default"
+        ),
+    )
+    p.add_argument(
+        "--sweep",
+        nargs="?",
+        const=True,
+        default=False,
+        metavar="CIDR",
+        help=(
+            "after the broadcast, probe every address of the local subnet "
+            "(or of the given CIDR) so a device that ignores broadcast is still found"
+        ),
+    )
 
     p = sub.add_parser(
         "probe",
@@ -157,6 +186,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-save", action="store_true", help="do not update the registry")
 
     p = sub.add_parser("list", parents=[common], help="list devices from the registry")
+    p.add_argument(
+        "--all-devices",
+        action="store_true",
+        help="also list devices that have no switchable outlet",
+    )
 
     p = sub.add_parser("status", parents=[common], help="show state and power use")
     p.add_argument("device", nargs="*", help="alias, host, IP, MAC or device id")
@@ -175,7 +209,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--force-protected",
         action="store_true",
-        help="also override the protected list",
+        help="also override the protected list (never overrides a critical device)",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="run every safety check and report what would happen, changing nothing",
     )
 
     p = sub.add_parser(
@@ -186,7 +225,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("device")
     p.add_argument("--child", default=None, help="socket of a power strip (alias or index)")
     p.add_argument("--yes", action="store_true", help="confirm that power may be cut")
-    p.add_argument("--force-protected", action="store_true", help="override the protected list")
+    p.add_argument(
+        "--force-protected",
+        action="store_true",
+        help="override the protected list (never overrides a critical device)",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="run every safety check and report what would happen, changing nothing",
+    )
     p.add_argument(
         "--off-seconds",
         type=float,
@@ -214,8 +262,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("protect", parents=[common], help="protect a device from being switched off")
     p.add_argument("device")
+    p.add_argument(
+        "--critical",
+        action="store_true",
+        help=(
+            "never switch this device off, whatever flags are passed; "
+            "removing the protection means editing the protection file by hand"
+        ),
+    )
 
-    p = sub.add_parser("unprotect", parents=[common], help="remove a device from the protected list")
+    p = sub.add_parser(
+        "unprotect", parents=[common], help="remove a device from the protected list"
+    )
     p.add_argument("device")
 
     p = sub.add_parser("protected", parents=[common], help="list protected devices")
@@ -249,17 +307,40 @@ async def run(args: argparse.Namespace) -> int:
         target = args.target or default_broadcast()
         if not args.json:
             out(f"Scanning {target} for {', '.join(names)} devices ({args.timeout}s) ...")
+        if not args.json and args.sweep:
+            out("Sweeping the local subnet as well; this takes longer.")
         records = await core.discover(
             session,
             backends=names,
             target=target,
             timeout=args.timeout,
             save=not args.no_save,
+            sweep=args.sweep,
         )
+        # This tool is about power. A device with no relay cannot be switched,
+        # so it is not shown unless it is explicitly asked for.
+        if not args.all_devices:
+            records = [rec for rec in records if rec.supports_switching]
         if args.json:
             emit_json([rec.to_dict() for rec in records])
         else:
-            print_records(records, {p.casefold() for p in session.registry.protected})
+            print_records(
+                records, session.registry.protected_keys(), session.registry.critical_keys()
+            )
+            seen = {rec.host for rec in records}
+            missing = [
+                rec
+                for rec in session.registry.devices
+                if rec.host not in seen
+                and rec.supports_switching
+                and (args.backend is None or rec.backend == args.backend)
+            ]
+            if missing:
+                out("\nKnown but did not answer this scan:")
+                for rec in missing:
+                    label = rec.alias or rec.host
+                    when = f", last seen {rec.last_seen}" if rec.last_seen else ""
+                    out(f"  {label} ({rec.host}){when}")
             if not args.no_save:
                 out(f"\nSaved {len(records)} device(s) to {registry_path()}")
             if any(rec.needs_credentials for rec in records):
@@ -271,14 +352,16 @@ async def run(args: argparse.Namespace) -> int:
 
     if command == "probe":
         names = [args.backend] if args.backend else backend_names()
-        records = await core.probe(
-            session, list(args.host), backends=names, save=not args.no_save
-        )
+        records = await core.probe(session, list(args.host), backends=names, save=not args.no_save)
         if args.json:
             emit_json([rec.to_dict() for rec in records])
         else:
             if records:
-                print_records(records, {p.casefold() for p in session.registry.protected})
+                print_records(
+                    records,
+                    session.registry.protected_keys(),
+                    session.registry.critical_keys(),
+                )
             missed = set(args.host) - {rec.host for rec in records}
             for host in sorted(missed):
                 out(f"{host}: no supported device answered")
@@ -288,12 +371,15 @@ async def run(args: argparse.Namespace) -> int:
         records = [
             rec
             for rec in session.registry.devices
-            if args.backend is None or rec.backend == args.backend
+            if (args.backend is None or rec.backend == args.backend)
+            and (args.all_devices or rec.supports_switching)
         ]
         if args.json:
             emit_json([rec.to_dict() for rec in records])
         else:
-            print_records(records, {p.casefold() for p in session.registry.protected})
+            print_records(
+                records, session.registry.protected_keys(), session.registry.critical_keys()
+            )
         return EXIT_OK
 
     if command == "status":
@@ -339,6 +425,8 @@ async def run(args: argparse.Namespace) -> int:
 
     if command in {"on", "off"}:
         turn_on = command == "on"
+        if not turn_on and args.dry_run:
+            return await dry_run(session, args, cycle=False)
         result = await core.switch(
             session,
             args.device,
@@ -355,6 +443,8 @@ async def run(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     if command == "cycle":
+        if args.dry_run:
+            return await dry_run(session, args, cycle=True)
         result = await core.cycle(
             session,
             args.device,
@@ -373,54 +463,84 @@ async def run(args: argparse.Namespace) -> int:
         else:
             out(f"Power cycled {result.device} ({result.host}).")
             for event in result.events:
-                fields = " ".join(
-                    f"{k}={v}" for k, v in event.items() if k not in {"step", "at"}
-                )
+                fields = " ".join(f"{k}={v}" for k, v in event.items() if k not in {"step", "at"})
                 out(f"  +{event['at']:>6.1f}s  {event['step']:<14} {fields}")
             out(f"Final state: {result.final_state}")
         return EXIT_OK
 
     if command == "protect":
-        record = session.resolve(args.device, args.backend)
-        key = record.alias or record.host
-        session.registry.protect(key)
+        # A device can be protected before it is in the registry: a name that
+        # does not resolve yet is stored verbatim, so protection is in place as
+        # soon as the device appears under that alias or address.
+        try:
+            record = session.resolve(args.device, args.backend)
+            entry = session.registry.protect(record=record, critical=args.critical)
+        except DeviceNotFound:
+            entry = session.registry.protect(name=args.device, critical=args.critical)
+            out(f"'{args.device}' is not in the registry yet; protecting the name anyway.")
         session.registry.save()
-        out(f"Protected '{key}': 'powerctl off' and 'powerctl cycle' will refuse it.")
+        identifiers = ", ".join(sorted(entry.identifiers()))
+        tier = (
+            "critical, no flag overrides it"
+            if entry.critical
+            else "override with --force-protected"
+        )
+        out(
+            f"Protected '{entry.name}' ({tier}): 'powerctl off' and 'powerctl cycle' "
+            f"will refuse it when addressed by any of: {identifiers}."
+        )
         return EXIT_OK
 
     if command == "unprotect":
         removed = session.registry.unprotect(args.device)
         session.registry.save()
-        out(f"Removed '{args.device}' from the protected list." if removed
-            else f"'{args.device}' was not on the protected list.")
+        out(
+            f"Removed '{args.device}' from the protected list."
+            if removed
+            else f"'{args.device}' was not on the protected list."
+        )
         return EXIT_OK
 
     if command == "protected":
-        entries = sorted(set(session.registry.protected))
+        entries = session.registry._unique_protections()
         if args.json:
-            emit_json(entries)
+            emit_json([entry.to_dict() for entry in entries])
+        elif not entries:
+            out("No protected devices.")
         else:
-            out("\n".join(entries) if entries else "No protected devices.")
+            for entry in entries:
+                identifiers = ", ".join(value for value in (entry.host, entry.mac) if value)
+                mark = "  [critical]" if entry.critical else ""
+                out(f"{entry.name}{mark}" + (f"  ({identifiers})" if identifiers else ""))
         return EXIT_OK
 
     if command == "login":
         backend = args.backend or DEFAULT_BACKEND
-        username = args.username or input(f"{backend} account (email): ").strip()
+        scope = core.credential_scope(backend)
+        if scope != backend:
+            out(
+                f"'{backend}' authenticates against the shared '{scope}' account, "
+                f"which every adapter using that account will pick up."
+            )
+        username = args.username or input(f"{scope} account (email): ").strip()
         if not username:
             raise UsageError("no account name given")
-        password = getpass.getpass(f"{backend} password (not echoed): ")
+        password = getpass.getpass(f"{scope} password (not echoed): ")
         if not password:
             raise UsageError("no password given")
-        path = store_credentials(backend, username, password)
+        path = store_credentials(scope, username, password)
         REDACTOR.add(password)
-        out(f"Stored credentials for '{backend}' in {path} (mode 0600).")
+        out(f"Stored credentials for '{scope}' in {path} (mode 0600).")
         return EXIT_OK
 
     if command == "logout":
-        backend = args.backend or DEFAULT_BACKEND
-        removed = forget_credentials(backend)
-        out(f"Removed stored credentials for '{backend}'." if removed
-            else f"No stored credentials for '{backend}'.")
+        scope = core.credential_scope(args.backend or DEFAULT_BACKEND)
+        removed = forget_credentials(scope)
+        out(
+            f"Removed stored credentials for '{scope}'."
+            if removed
+            else f"No stored credentials for '{scope}'."
+        )
         return EXIT_OK
 
     if command == "doctor":
@@ -433,6 +553,54 @@ async def run(args: argparse.Namespace) -> int:
         return EXIT_OK if report["ok"] else 1
 
     raise UsageError(f"unknown command '{command}'")
+
+
+async def dry_run(session: Session, args: argparse.Namespace, *, cycle: bool) -> int:
+    """Run the safety checks for a power cut and report, without switching.
+
+    This exists so that the guards can be exercised against real hardware
+    without ever cutting power, which is the only safe way to verify them.
+    """
+    record = session.resolve(args.device, args.backend)
+    action = "cycle" if cycle else "off"
+    try:
+        record = await core.identify(session, record, child=args.child)
+        core.check_switch_allowed(
+            session,
+            record,
+            on=False,
+            confirmed=args.yes,
+            force_protected=args.force_protected,
+        )
+    except PowerctlError as exc:
+        payload = {
+            "device": record.alias or record.host,
+            "host": record.host,
+            "action": action,
+            "would_run": False,
+            "reason": str(exc),
+        }
+        if args.json:
+            emit_json(payload)
+        else:
+            out(f"Dry run: '{action}' would be REFUSED for {payload['device']}.")
+            out(f"  reason: {exc}")
+        return exc.exit_code
+    payload = {
+        "device": record.alias or record.host,
+        "host": record.host,
+        "mac": record.mac,
+        "action": action,
+        "would_run": True,
+        "protected": session.registry.is_protected(record),
+        "critical": session.registry.is_critical(record),
+    }
+    if args.json:
+        emit_json(payload)
+    else:
+        out(f"Dry run: '{action}' WOULD run against {payload['device']} ({record.host}).")
+        out("  nothing was changed on the device")
+    return EXIT_OK
 
 
 def doctor_report(session: Session) -> dict[str, Any]:
@@ -456,24 +624,30 @@ def doctor_report(session: Session) -> dict[str, Any]:
         lines.append(f"credential file: {cred} (none)")
 
     for name in backend_names():
-        env_user = f"POWERCTL_{name.upper()}_USERNAME"
+        scope = core.credential_scope(name)
+        env_user = f"POWERCTL_{scope.upper()}_USERNAME"
         env_set = bool(os.environ.get(env_user))
         try:
-            creds = load_credentials(name)
+            creds = load_credentials(scope)
         except PowerctlError as exc:
             ok = False
             lines.append(f"backend {name}: credential error: {exc}")
             continue
         if creds is None:
             lines.append(
-                f"backend {name}: no credentials "
-                f"(fine for older KASA devices; newer ones need 'powerctl login --backend {name}')"
+                f"backend {name} (account '{scope}'): no credentials "
+                f"(fine for older Kasa devices; Tapo needs 'powerctl login --backend {name}')"
             )
         else:
-            lines.append(f"backend {name}: credentials for {creds.username} from {creds.source}")
+            lines.append(
+                f"backend {name} (account '{scope}'): credentials for "
+                f"{creds.username} from {creds.source}"
+            )
         if env_set and creds and not creds.source.startswith("env"):
             lines.append(f"  note: {env_user} is set but was not used")
-    lines.append("Never pass a password on the command line; use 'powerctl login' or the environment.")
+    lines.append(
+        "Never pass a password on the command line; use 'powerctl login' or the environment."
+    )
     return {"ok": ok, "lines": lines}
 
 

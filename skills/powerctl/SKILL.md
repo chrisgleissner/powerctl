@@ -13,14 +13,38 @@ human output.
 
 **Never cut power without explicit permission from the user in the current
 conversation.** Discovery, `list` and `status` are read-only and can be run freely.
-`off` and `cycle` interrupt power to real hardware and can lose the user's work.
+`off` and `cycle` interrupt power to real hardware: they can lose work, spoil food and
+take the network down.
 
 * Ask before running `off` or `cycle`, naming the exact device you are about to switch.
 * Do not pass `--yes` unless the user has just agreed to that specific action.
 * Do not pass `--force-protected`. It overrides the user's own protected list. If a
   device is protected, report that and stop.
+* **Never run `off` or `cycle` to test, verify or demonstrate anything.** Use
+  `--dry-run`, which runs every safety check and reports the outcome without touching the
+  device. This rule exists because a real fridge and router were switched off by a
+  verification command.
 * `on` is not guarded, but still say which device you switched on.
 * If unsure which outlet feeds a machine, ask. Do not guess from an alias.
+* Never delete or edit `~/.config/powerctl/protected.json` or `devices.json`.
+
+## Checking a power cut before running it
+
+```bash
+powerctl off <device> --yes --dry-run --json
+powerctl cycle <device> --yes --dry-run --json
+```
+
+The result says `"would_run": true` or gives the `reason` it would be refused, and
+reports whether the device is `protected` or `critical`. Nothing on the device changes.
+This is the only way to verify guard behaviour.
+
+## Two adapters
+
+`kasa` drives Kasa IOT hardware (KP115, HS110, HS300) and needs no account. `tapo` drives
+Tapo hardware including recent TPAP firmware such as the P110M, and needs a TP-Link
+account. Both use one shared credential scope, `tplink`. Commands use every adapter unless
+`--backend` says otherwise.
 
 ## Finding devices
 
@@ -30,7 +54,12 @@ powerctl list --json              # registry only, no network traffic
 ```
 
 Each record has `host`, `alias`, `model`, `device_type`, `mac`, `supports_switching`,
-`supports_energy`, `needs_credentials` and `children` (sockets of a power strip).
+`supports_energy`, `needs_credentials`, `last_seen` and `children` (sockets of a power
+strip).
+
+Only devices with a switchable outlet are listed. Mesh nodes and cameras answer the same
+discovery but have no relay; pass `--all-devices` if the user asks what else is on the
+network. Addresses change with DHCP, so identify a device by alias or MAC, not by address.
 
 If a device the user expects is missing, do not re-run discovery repeatedly. Discovery is
 a UDP broadcast and does not cross subnets or a router that blocks broadcast between an
@@ -105,7 +134,7 @@ Report afterwards: the events list with timestamps, `final_state`, and `wait_sec
 | 0 | Success |
 | 1 | Error (device unreachable, authentication failed) |
 | 2 | Bad arguments |
-| 3 | Refused by a safety guard: `--yes` missing, or the device is protected |
+| 3 | Refused by a safety guard: `--yes` missing, the device is protected or critical, or it could not be identified |
 | 4 | Power was restored, but `--wait-host` did not answer before the timeout |
 
 Code 3 is never something to work around. Report it and ask the user what to do.
@@ -113,10 +142,17 @@ Code 3 is never something to work around. Report it and ask the user what to do.
 ## Protection list
 
 ```bash
-powerctl protected --json          # devices that may not be switched off
-powerctl protect <device>          # add one
-powerctl unprotect <device>        # remove one, only when the user asks
+powerctl protected --json              # devices that may not be switched off
+powerctl protect <device>              # add one
+powerctl protect <device> --critical   # add one that no flag can override
+powerctl unprotect <device>            # remove one, only when the user asks
 ```
+
+Each entry carries the device's name, address, MAC and device id, and a match on any one
+of them protects it. An entry marked `"critical": true` is never switched off by this
+tool: no flag lifts it, and it can only be removed by editing
+`~/.config/powerctl/protected.json` by hand. Do not edit that file, and do not suggest
+editing it unless the user asks how to lift a critical protection.
 
 Check `powerctl protected --json` before proposing any power cut.
 

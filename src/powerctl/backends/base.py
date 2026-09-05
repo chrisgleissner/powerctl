@@ -37,13 +37,15 @@ class DeviceRecord:
     children: list[str] = field(default_factory=list)
     connect_hint: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    #: UTC timestamp of the last scan or probe that reached this device.
+    last_seen: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> DeviceRecord:
-        known = {f for f in cls.__dataclass_fields__}
+        known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
@@ -107,6 +109,15 @@ class Backend(ABC):
     name: str = "base"
     #: Human readable description shown by ``powerctl backends``.
     description: str = ""
+    #: Name of the account these devices authenticate against. Adapters that
+    #: share one vendor account share one scope, so the user stores the
+    #: credentials once: a TP-Link ID works for both Kasa and Tapo devices.
+    credential_scope: str = ""
+
+    @property
+    def scope(self) -> str:
+        """Credential scope, defaulting to the adapter's own name."""
+        return self.credential_scope or self.name
 
     @abstractmethod
     async def discover(

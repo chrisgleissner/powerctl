@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import shutil
@@ -50,9 +51,7 @@ def default_broadcast() -> str:
                     continue
                 if info.get("broadcast"):
                     return info["broadcast"]
-                network = ipaddress.ip_network(
-                    f"{info['local']}/{info['prefixlen']}", strict=False
-                )
+                network = ipaddress.ip_network(f"{info['local']}/{info['prefixlen']}", strict=False)
                 return str(network.broadcast_address)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         return DEFAULT_BROADCAST
@@ -62,16 +61,12 @@ def default_broadcast() -> str:
 async def tcp_open(host: str, port: int, timeout: float = 2.0) -> bool:
     """True if a TCP connection to ``host:port`` completes within ``timeout``."""
     try:
-        _, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=timeout
-        )
-    except (OSError, asyncio.TimeoutError):
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+    except (TimeoutError, OSError):
         return False
     writer.close()
-    try:
+    with contextlib.suppress(OSError):
         await writer.wait_closed()
-    except OSError:
-        pass
     return True
 
 
@@ -92,7 +87,7 @@ async def icmp_up(host: str, timeout: float = 2.0) -> bool:
     )
     try:
         return await asyncio.wait_for(process.wait(), timeout=timeout + 1) == 0
-    except asyncio.TimeoutError:
+    except TimeoutError:
         process.kill()
         return False
 
@@ -121,6 +116,75 @@ async def wait_for_host(
             return time.monotonic() - started
         await asyncio.sleep(interval)
     return None
+
+
+def local_subnet() -> str | None:
+    """Return the CIDR of the interface holding the default route, e.g. 192.0.2.0/24."""
+    if not shutil.which("ip"):
+        return None
+    try:
+        routes = json.loads(
+            subprocess.run(
+                ["ip", "-j", "route", "show", "default"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            ).stdout
+        )
+        interface = next((route["dev"] for route in routes if route.get("dev")), None)
+        if not interface:
+            return None
+        addresses = json.loads(
+            subprocess.run(
+                ["ip", "-j", "-4", "addr", "show", "dev", interface],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            ).stdout
+        )
+        for entry in addresses:
+            for info in entry.get("addr_info", []):
+                if info.get("family") == "inet":
+                    network = ipaddress.ip_network(
+                        f"{info['local']}/{info['prefixlen']}", strict=False
+                    )
+                    return str(network)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def subnet_hosts(cidr: str, *, max_hosts: int = 1024) -> list[str]:
+    """Return the usable host addresses of ``cidr``.
+
+    Refuses a network larger than ``max_hosts`` so a mistyped prefix cannot start
+    a scan of millions of addresses.
+    """
+    network = ipaddress.ip_network(cidr, strict=False)
+    if network.num_addresses > max_hosts:
+        raise ValueError(
+            f"{cidr} has {network.num_addresses} addresses, more than the limit of {max_hosts}"
+        )
+    return [str(address) for address in network.hosts()]
+
+
+async def open_ports(
+    hosts: list[str], ports: tuple[int, ...], *, concurrency: int = 64, timeout: float = 1.0
+) -> list[str]:
+    """Return the hosts that accept a TCP connection on any of ``ports``."""
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def check(host: str) -> str | None:
+        async with semaphore:
+            for port in ports:
+                if await tcp_open(host, port, timeout=timeout):
+                    return host
+        return None
+
+    results = await asyncio.gather(*(check(host) for host in hosts))
+    return [host for host in results if host]
 
 
 def resolve_host(host: str) -> str | None:

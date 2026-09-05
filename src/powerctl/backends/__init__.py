@@ -11,7 +11,11 @@ from .base import Backend, DeviceRecord, DeviceStatus, EnergyReading
 
 _LOADERS: dict[str, str] = {
     # backend name -> module path providing get_backend()
+    # Two adapters on purpose: the Kasa IOT protocol is frozen and served well by
+    # python-kasa, while Tapo firmware keeps changing and needs a library that
+    # releases often, currently plugp100.
     "kasa": "powerctl.backends.kasa_backend",
+    "tapo": "powerctl.backends.tapo_backend",
 }
 
 _CACHE: dict[str, Backend] = {}
@@ -27,9 +31,7 @@ def get_backend(name: str) -> Backend:
     if name in _CACHE:
         return _CACHE[name]
     if name not in _LOADERS:
-        raise UsageError(
-            f"unknown backend '{name}'; known backends: {', '.join(backend_names())}"
-        )
+        raise UsageError(f"unknown backend '{name}'; known backends: {', '.join(backend_names())}")
     import importlib
 
     module = importlib.import_module(_LOADERS[name])

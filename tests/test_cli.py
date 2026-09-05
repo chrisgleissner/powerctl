@@ -73,8 +73,9 @@ def test_cycle_json_lists_events(registry_with_plug, fake_backend, capsys):
 
 
 def test_doctor_flags_a_wide_open_credential_file(capsys):
-    from powerctl.secrets import store_credentials
     import os
+
+    from powerctl.secrets import store_credentials
 
     path = store_credentials("fake", "user", "password123")
     os.chmod(path, 0o644)
