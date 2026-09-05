@@ -346,3 +346,19 @@ def test_list_json(registry_with_plug, capsys):
 def test_list_of_an_empty_registry(capsys):
     assert cli.main(["list"]) == EXIT_OK
     assert "No devices found" in capsys.readouterr().out
+
+
+def test_status_all_skips_devices_without_a_relay(fake_backend, capsys):
+    reg = Registry(
+        devices=[
+            DeviceRecord(
+                backend="fake", host="192.0.2.10", alias="Lab Plug", supports_switching=True
+            ),
+            DeviceRecord(backend="fake", host="192.0.2.20", model="X20", error="mesh node"),
+        ]
+    )
+    reg.save()
+    assert cli.main(["status", "--all", "--backend", "fake"]) == EXIT_OK
+    printed = capsys.readouterr().out
+    assert "Lab Plug" in printed
+    assert "192.0.2.20" not in printed

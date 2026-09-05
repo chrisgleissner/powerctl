@@ -388,7 +388,9 @@ async def run(args: argparse.Namespace) -> int:
             names = [
                 rec.alias or rec.host
                 for rec in session.registry.devices
-                if args.backend is None or rec.backend == args.backend
+                # A device with no relay has no state to report, and querying it
+                # would only produce an error for every mesh node on the network.
+                if rec.supports_switching and (args.backend is None or rec.backend == args.backend)
             ]
             if not names:
                 raise UsageError("registry is empty; run 'powerctl discover' first")
