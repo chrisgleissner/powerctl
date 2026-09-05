@@ -218,10 +218,6 @@ state files appears in the working tree or, with `--history`, in any commit. Onl
 documentation values are allowed: the RFC 5737 ranges, `AA:BB:CC:DD:EE:FF` and
 `example.com`. It runs as a pre-commit hook and in CI over the full history.
 
-While the repository is private, the Codecov badge needs the repository's graph token
-appended (`.../graph/badge.svg?token=<graph token>`, under Settings, Badge in Codecov).
-No token is needed once the repository is public.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
