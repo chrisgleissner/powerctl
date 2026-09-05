@@ -8,7 +8,8 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Find every smart outlet on your network, read what it is drawing, and switch it, from one
-command. Includes a Claude Code skill so an agent can do the same.
+command. Ships with an agent skill for Claude Code, Codex and GitHub Copilot, so an agent
+can do the same under the same safety rules.
 
 Its main job is rebooting hardware that has no reset line: cut the outlet, wait, restore
 it, then keep waiting until the machine answers on the network again. Cutting power is
@@ -49,15 +50,67 @@ not listed. Pass `--all-devices` if you want to see them.
 
 ## Install
 
+[![Release](https://img.shields.io/github/v/release/chrisgleissner/powerctl?display_name=tag&sort=semver)](https://github.com/chrisgleissner/powerctl/releases/latest)
+
+There is no one-click install for agent skills on any of these tools; the closest is a
+single command, given for each below. Requires Python 3.11 or newer.
+
+### The command line tool
+
+Install the released version straight from the repository, no clone needed:
+
 ```bash
-git clone git@github.com:chrisgleissner/powerctl.git
+uv tool install "git+https://github.com/chrisgleissner/powerctl@v0.1.0"   # or: pipx install
+powerctl --version
+```
+
+### With the agent skill
+
+Clone and run the installer. It installs the command, then registers the skill with every
+agent tool it finds on the machine:
+
+```bash
+git clone https://github.com/chrisgleissner/powerctl.git
 cd powerctl
 ./install.sh
 ```
 
-This installs the `powerctl` command with `uv tool install` (or `pipx`), links the Claude
-Code skill into `~/.claude/skills/powerctl` so it works in every project, and adds a
-pre-commit hook that keeps local network details out of the repository.
+| Flag | Effect |
+| --- | --- |
+| *(none)* | CLI, plus every agent tool found on the machine |
+| `--cli-only` | Just the `powerctl` command |
+| `--claude` | Symlinks the skill into `~/.claude/skills/powerctl` |
+| `--codex` | Symlinks `~/.codex/skills/powerctl` and adds the `/powerctl` prompt |
+| `--copilot` | Symlinks the skill into `~/.copilot/skills/powerctl` |
+| `--uninstall` | Removes the skill links; leaves the command installed |
+
+The skill is symlinked rather than copied, so `git pull` updates every agent at once.
+
+### Claude Code, as a plugin
+
+The repository is also a plugin marketplace, which gives versioned installs and updates:
+
+```
+/plugin marketplace add chrisgleissner/powerctl
+/plugin install powerctl@powerctl
+```
+
+Install the `powerctl` command separately, as above: the plugin ships the skill, not the
+binary. Skills load as `/powerctl:powerctl`.
+
+### Codex
+
+`./install.sh --codex` places the skill in `~/.codex/skills/powerctl` and a prompt in
+`~/.codex/prompts/powerctl.md`, so `/powerctl` works in any session. In a repository,
+Codex also reads [AGENTS.md](AGENTS.md).
+
+### GitHub Copilot
+
+`./install.sh --copilot` places the skill in `~/.copilot/skills/powerctl`; run
+`/skills reload` in an open session, then `/skills info powerctl` to confirm. For a single
+repository, copy `skills/powerctl` into that repository's `.github/skills/` instead. This
+repository carries its own copies in `.github/skills/` and `.agents/skills/`, kept in sync
+by `scripts/sync-agent-skills.sh`.
 
 ## Commands
 
@@ -211,6 +264,10 @@ smoke tests the command, and scans for secrets with gitleaks. Coverage is gated 
 it cannot fall below 95% unnoticed: `pytest --cov-fail-under` fails the build with no
 external service, and Codecov enforces a 95% project and 90% patch target from
 `codecov.yml`.
+
+The skill in `skills/powerctl/SKILL.md` is canonical. `scripts/sync-agent-skills.sh`
+copies it to `.github/skills/` and `.agents/skills/` for Copilot, and CI fails if the
+copies drift.
 
 `scripts/check-repo-clean.sh` keeps the repository publishable. It fails if a private IPv4
 address, a MAC address, an email address, a token, a WiFi name or key, or one of the local

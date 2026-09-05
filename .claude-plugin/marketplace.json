@@ -1,0 +1,25 @@
+{
+  "name": "powerctl",
+  "owner": {
+    "name": "Chris Gleissner",
+    "url": "https://github.com/chrisgleissner"
+  },
+  "description": "Smart plug control for Claude Code: read power draw, switch outlets behind safety guards, and reboot machines that have no reset line",
+  "plugins": [
+    {
+      "name": "powerctl",
+      "source": ".",
+      "description": "Discover, monitor and safely switch TP-Link Kasa and Tapo smart plugs. Requires the powerctl command; see the repository README for installation.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Chris Gleissner",
+        "url": "https://github.com/chrisgleissner"
+      },
+      "homepage": "https://github.com/chrisgleissner/powerctl",
+      "repository": "https://github.com/chrisgleissner/powerctl",
+      "license": "MIT",
+      "category": "automation",
+      "keywords": ["smart-plug", "tp-link", "kasa", "tapo", "power", "home-automation"]
+    }
+  ]
+}

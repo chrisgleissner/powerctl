@@ -62,6 +62,11 @@ jobs:
         run: uv run ruff check src tests
       - name: ruff format --check
         run: uv run ruff format --check src tests
+      - name: Agent skill copies are in sync
+        run: ./scripts/sync-agent-skills.sh --check
+      - name: Claude Code plugin manifest is valid
+        run: |
+          python3 -c "import json,sys; [json.load(open(f)) for f in ('.claude-plugin/plugin.json', '.claude-plugin/marketplace.json')]"
 
   privacy:
     name: No local setup in the repository

@@ -1,0 +1,22 @@
+{
+  "name": "powerctl",
+  "description": "Discover, monitor and safely switch TP-Link Kasa and Tapo smart plugs, with guarded power cycling for machines that have no reset line",
+  "version": "0.1.0",
+  "author": {
+    "name": "Chris Gleissner",
+    "url": "https://github.com/chrisgleissner"
+  },
+  "homepage": "https://github.com/chrisgleissner/powerctl",
+  "repository": "https://github.com/chrisgleissner/powerctl",
+  "license": "MIT",
+  "keywords": [
+    "smart-plug",
+    "tp-link",
+    "kasa",
+    "tapo",
+    "power",
+    "energy-monitoring",
+    "power-cycle",
+    "home-automation"
+  ]
+}
