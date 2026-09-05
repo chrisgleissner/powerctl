@@ -2,6 +2,7 @@
 
 [![Build](https://github.com/chrisgleissner/powerctl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chrisgleissner/powerctl/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/chrisgleissner/powerctl/graph/badge.svg)](https://codecov.io/gh/chrisgleissner/powerctl)
+[![Coverage gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](https://www.python.org/)
 [![Ruff](https://img.shields.io/badge/lint-ruff-261230)](https://docs.astral.sh/ruff/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -33,7 +34,7 @@ Bench Plug  [on]
 | Device family | Adapter | Library | Notes |
 | --- | --- | --- | --- |
 | Kasa IOT: KP115, HS100/110, KP303, HS300 | `kasa` | [python-kasa](https://github.com/python-kasa/python-kasa) | No account needed |
-| Tapo: P100/P105/P110/P115, P110M and other TPAP firmware | `tapo` | [plugp100](https://github.com/petretiandrea/plugp100) | Needs a TP-Link account |
+| Tapo: P100/P105/P110/P115, P110M and other TPAP firmware | `tapo` | [plugp100](https://github.com/petretiandrea/plugp100) | Needs a TP-Link account; reports watts and kWh but not voltage or current |
 
 Devices that answer TP-Link discovery but hold no relay, such as Deco mesh nodes and
 cameras, are not listed: this tool is about power. Pass `--all-devices` to see them.
@@ -177,6 +178,21 @@ optionally `probe`), expose `get_backend()`, and add the module to `_LOADERS` in
 `backends/__init__.py`. Adapters are imported lazily, so a missing dependency disables one
 adapter rather than the CLI. Set `credential_scope` when the new devices share an account
 with an existing adapter.
+
+## Continuous integration
+
+Every push runs the suite on Python 3.11 and 3.12, lints and format-checks with ruff,
+smoke tests the command, and verifies that no private address, MAC address or local state
+file was committed. Coverage is gated twice, so it cannot silently fall below 95%:
+
+* `pytest` fails the build below 95% through `--cov-fail-under` in `pyproject.toml`. This
+  works with no external service.
+* Codecov enforces a 95% project target and a 90% patch target from `codecov.yml`.
+
+While the repository is private, the Codecov badge needs the repository's graph token
+appended (`.../graph/badge.svg?token=<graph token>`, found under Settings, Badge in
+Codecov); without it the badge shows "unknown". The badge needs no token once the
+repository is public.
 
 ## Development
 
