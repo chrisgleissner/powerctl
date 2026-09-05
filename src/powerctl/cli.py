@@ -148,6 +148,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=5, help="discovery timeout in seconds")
     p.add_argument("--no-save", action="store_true", help="do not update the registry")
 
+    p = sub.add_parser(
+        "probe",
+        parents=[common],
+        help="identify devices by address when discovery does not reach them",
+    )
+    p.add_argument("host", nargs="+", help="IP address or host name to try")
+    p.add_argument("--no-save", action="store_true", help="do not update the registry")
+
     p = sub.add_parser("list", parents=[common], help="list devices from the registry")
 
     p = sub.add_parser("status", parents=[common], help="show state and power use")
@@ -260,6 +268,21 @@ async def run(args: argparse.Namespace) -> int:
                     "Run 'powerctl login --backend kasa'."
                 )
         return EXIT_OK
+
+    if command == "probe":
+        names = [args.backend] if args.backend else backend_names()
+        records = await core.probe(
+            session, list(args.host), backends=names, save=not args.no_save
+        )
+        if args.json:
+            emit_json([rec.to_dict() for rec in records])
+        else:
+            if records:
+                print_records(records, {p.casefold() for p in session.registry.protected})
+            missed = set(args.host) - {rec.host for rec in records}
+            for host in sorted(missed):
+                out(f"{host}: no supported device answered")
+        return EXIT_OK if records else 1
 
     if command == "list":
         records = [

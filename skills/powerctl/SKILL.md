@@ -32,6 +32,19 @@ powerctl list --json              # registry only, no network traffic
 Each record has `host`, `alias`, `model`, `device_type`, `mac`, `supports_switching`,
 `supports_energy`, `needs_credentials` and `children` (sockets of a power strip).
 
+If a device the user expects is missing, do not re-run discovery repeatedly. Discovery is
+a UDP broadcast and does not cross subnets or a router that blocks broadcast between an
+IoT/guest network and the main one. Ask the user for the address from the vendor app
+(device, Settings, Device Info) and probe it directly:
+
+```bash
+powerctl probe <ip> --json
+```
+
+`probe` tries every supported protocol against that one address and adds the device to
+the registry if it answers. If probe also fails, the device is not reachable from this
+machine's network, which is a router or SSID problem, not a powerctl option.
+
 `needs_credentials: true` means the device is a newer Kasa or a Tapo model and needs a
 TP-Link account. Tell the user to run `powerctl login --backend kasa` themselves; it
 prompts for the password. Never ask for the password in chat, never put it on a command

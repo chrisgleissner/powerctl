@@ -44,11 +44,27 @@ powerctl cycle lab-plug --yes --off-seconds 8 --wait-host 192.0.2.60 --wait-port
 Devices can be named by alias, IP address, host name, MAC address or device id. Aliases
 are matched case-insensitively, and a unique prefix is enough (`powerctl status lab`).
 
+### When discovery finds nothing
+
+Discovery is a UDP broadcast. It does not cross subnets, and many routers block
+broadcast between a guest or IoT network and the main one. If a device is missing, probe
+its address directly; this walks every supported protocol and encryption scheme instead
+of relying on broadcast:
+
+```bash
+powerctl probe 192.0.2.42
+```
+
+Get the address from the vendor app (in the Tapo or Kasa app: the device, then Settings,
+then Device Info). If the probe also fails, the device is on a network this machine
+cannot reach, and the fix is a router or SSID change rather than a powerctl option.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `discover` | UDP broadcast scan; writes every device found to the registry |
+| `probe <host> ...` | Identify a device by address when broadcast discovery cannot reach it |
 | `list` | Print the registry without touching the network |
 | `status [device ...]` | Power state, model, and energy readings where supported |
 | `on <device>` | Switch on. Never needs a confirmation flag |

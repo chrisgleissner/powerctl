@@ -89,3 +89,15 @@ def test_cli_output_redacts_registered_secrets(capsys):
     REDACTOR.add("swordfish-secret")
     cli.out("password=swordfish-secret")
     assert "swordfish-secret" not in capsys.readouterr().out
+
+
+def test_probe_saves_the_device_it_finds(fake_backend, capsys):
+    assert cli.main(["probe", "192.0.2.10", "--backend", "fake"]) == EXIT_OK
+    capsys.readouterr()
+    assert cli.main(["list", "--backend", "fake"]) == EXIT_OK
+    assert "192.0.2.10" in capsys.readouterr().out
+
+
+def test_probe_reports_a_host_that_does_not_answer(fake_backend, capsys):
+    assert cli.main(["probe", "192.0.2.99", "--backend", "fake"]) == 1
+    assert "no supported device answered" in capsys.readouterr().out

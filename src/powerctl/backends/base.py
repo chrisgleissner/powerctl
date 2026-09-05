@@ -129,6 +129,20 @@ class Backend(ABC):
     ) -> DeviceStatus:
         """Query power state and, where available, energy readings."""
 
+    async def probe(
+        self,
+        host: str,
+        *,
+        credentials: Credentials | None,
+    ) -> DeviceRecord | None:
+        """Identify a single device by address, without broadcast discovery.
+
+        Used when UDP discovery does not reach the device, for example across a
+        guest network or a router that blocks broadcast. Returns None if the
+        device does not speak this backend's protocol.
+        """
+        raise NotImplementedError(f"backend '{self.name}' cannot probe a single host")
+
     @abstractmethod
     async def switch(
         self,

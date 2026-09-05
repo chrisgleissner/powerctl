@@ -87,6 +87,30 @@ async def discover(
     return found
 
 
+async def probe(
+    session: Session,
+    hosts: list[str],
+    *,
+    backends: list[str] | None = None,
+    save: bool = True,
+) -> list[DeviceRecord]:
+    """Identify devices by address when broadcast discovery does not reach them."""
+    names = backends or [DEFAULT_BACKEND]
+    found: list[DeviceRecord] = []
+    for host in hosts:
+        for name in names:
+            backend = session.backend(name)
+            record = await backend.probe(host, credentials=session.credentials(name))
+            if record is not None:
+                found.append(record)
+                if save:
+                    session.registry.upsert(record)
+                break
+    if save and found:
+        session.registry.save()
+    return found
+
+
 async def status(
     session: Session,
     name: str,

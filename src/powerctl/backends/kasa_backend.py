@@ -263,6 +263,35 @@ class KasaBackend(Backend):
         await device.update()
         return device
 
+    async def probe(
+        self,
+        host: str,
+        *,
+        credentials: Credentials | None,
+    ) -> DeviceRecord | None:
+        """Try every Kasa and Tapo protocol against one address.
+
+        ``Discover.try_connect_all`` walks the supported device families and
+        encryption schemes instead of relying on the UDP broadcast, so it finds a
+        device that discovery cannot reach.
+        """
+        try:
+            device = await Discover.try_connect_all(
+                host, credentials=_to_kasa_credentials(credentials), timeout=5
+            )
+        except AuthenticationError as exc:
+            raise AuthRequired(f"{host} requires TP-Link credentials: {exc}") from exc
+        if device is None:
+            return None
+        try:
+            await device.update()
+            return _record_from_device(device)
+        except AuthenticationError as exc:
+            raise AuthRequired(f"{host} requires TP-Link credentials: {exc}") from exc
+        finally:
+            with contextlib.suppress(Exception):
+                await device.disconnect()
+
     async def status(
         self,
         record: DeviceRecord,

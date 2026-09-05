@@ -50,6 +50,19 @@ class FakeBackend(Backend):
             )
         ]
 
+    async def probe(self, host, *, credentials):
+        self.calls.append(("probe", host))
+        if host != "192.0.2.10":
+            return None
+        return DeviceRecord(
+            backend=self.name,
+            host=host,
+            alias="Lab Plug",
+            model="FAKE100",
+            device_type="plug",
+            supports_switching=True,
+        )
+
     async def status(self, record, *, credentials, child=None, with_features=False):
         self.calls.append(("status", record.host, str(child)))
         return DeviceStatus(

@@ -129,3 +129,15 @@ async def test_cycle_records_wait_time_when_host_returns(session, monkeypatch):
     )
     assert result.wait_seconds == 4.2
     assert result.events[-1]["step"] == "wait_host"
+
+
+async def test_probe_adds_a_device_the_broadcast_missed(fake_backend):
+    session = core.Session(registry=Registry())
+    records = await core.probe(session, ["192.0.2.10"], backends=["fake"], save=False)
+    assert [rec.host for rec in records] == ["192.0.2.10"]
+    assert ("probe", "192.0.2.10") in fake_backend.calls
+
+
+async def test_probe_returns_nothing_for_a_foreign_host(fake_backend):
+    session = core.Session(registry=Registry())
+    assert await core.probe(session, ["192.0.2.99"], backends=["fake"], save=False) == []
