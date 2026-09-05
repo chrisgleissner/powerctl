@@ -7,13 +7,14 @@
 [![Ruff](https://img.shields.io/badge/lint-ruff-261230)](https://docs.astral.sh/ruff/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Command line tool to discover, query and switch networked smart power outlets, plus a
-Claude Code skill that drives it.
+Find every smart outlet on your network, read what it is drawing, and switch it, from one
+command. Includes a Claude Code skill so an agent can do the same.
 
-It reads the power state and energy figures of every switchable outlet on the network,
-switches outlets on and off behind explicit safety gates, and power cycles a machine that
-has no reset line: outlet off, wait, outlet on, then wait until the machine answers on the
-network again.
+Its main job is rebooting hardware that has no reset line: cut the outlet, wait, restore
+it, then keep waiting until the machine answers on the network again. Cutting power is
+also the one thing here that can spoil food or take a household offline, so every power
+cut passes explicit guards, and a fridge or router can be marked so that no flag switches
+it off.
 
 ```console
 $ powerctl discover
@@ -27,17 +28,24 @@ Bench Plug  [on]
   host=192.0.2.10  model=KP115  type=plug  mac=AA:BB:CC:DD:EE:FF
   power=73.5 W  voltage=243.2 V  current=0.426 A
   today=0.912 kWh  month=5.349 kWh  total=56.040 kWh
+
+$ powerctl off "Lab Server" --yes
+powerctl: 'Lab Server' is protected as critical and will not be switched off by
+powerctl under any flag.
 ```
 
-## What it supports
+## Supported devices
 
-| Device family | Adapter | Library | Notes |
+| Device family | Adapter | Library | Credentials |
 | --- | --- | --- | --- |
-| Kasa IOT: KP115, HS100/110, KP303, HS300 | `kasa` | [python-kasa](https://github.com/python-kasa/python-kasa) | No account needed |
-| Tapo: P100/P105/P110/P115, P110M and other TPAP firmware | `tapo` | [plugp100](https://github.com/petretiandrea/plugp100) | Needs a TP-Link account; reports watts and kWh but not voltage or current |
+| Kasa IOT: KP115, HS100/110, KP303, HS300 | `kasa` | [python-kasa](https://github.com/python-kasa/python-kasa) | None |
+| Tapo: P100/P105/P110/P115, and P110M and newer TPAP firmware | `tapo` | [plugp100](https://github.com/petretiandrea/plugp100) | TP-Link account |
 
-Devices that answer TP-Link discovery but hold no relay, such as Deco mesh nodes and
-cameras, are not listed: this tool is about power. Pass `--all-devices` to see them.
+Power strips are supported through `--child <socket>`. The Tapo adapter reports watts and
+kilowatt hours but not voltage or current.
+
+Mesh nodes and cameras answer the same TP-Link discovery but have no relay, so they are
+not listed. Pass `--all-devices` if you want to see them.
 
 ## Install
 
@@ -47,94 +55,39 @@ cd powerctl
 ./install.sh
 ```
 
-`install.sh` installs the `powerctl` command with `uv tool install` (falling back to
-`pipx`), links the Claude Code skill into `~/.claude/skills/powerctl` so it is available in
-every project, and installs a pre-commit hook that keeps local network details out of the
-repository.
+This installs the `powerctl` command with `uv tool install` (or `pipx`), links the Claude
+Code skill into `~/.claude/skills/powerctl` so it works in every project, and adds a
+pre-commit hook that keeps local network details out of the repository.
 
-## Quick start
+## Commands
 
-```bash
-powerctl discover                  # scan the network, write the device registry
-powerctl list                      # what is in the registry, no network traffic
-powerctl status <device>           # state plus power draw
-powerctl status --all --json       # every known device, machine readable
-powerctl on <device>               # switch on
-powerctl off <device> --yes        # switch off, confirmation required
-powerctl protect <device>          # refuse to switch this one off
-powerctl protect <device> --critical   # refuse it under every flag
-powerctl off <device> --yes --dry-run  # run the safety checks, change nothing
-```
+| Command | What it does |
+| --- | --- |
+| `discover` | Broadcast scan; writes the device registry |
+| `list` | Print the registry, no network traffic |
+| `status [device ...]` | Power state and energy readings; `--all` for every device |
+| `on <device>` | Switch on. Never needs a confirmation flag |
+| `off <device> --yes` | Switch off |
+| `cycle <device> --yes` | Off, wait, on, then wait for a host to return |
+| `probe <host> ...` | Identify a device by address when discovery cannot reach it |
+| `protect` / `unprotect` / `protected` | Manage devices that may not be switched off |
+| `login` / `logout` | Store or remove the TP-Link account |
+| `backends` | List the adapters this build supports |
+| `doctor` | Check registry, credential sources and file permissions |
 
-Devices are named by alias, IP address, host name, MAC address, device id, or a unique
-alias prefix. Every command takes `--json`, and `--backend <name>` restricts it to one
-adapter.
+Name a device by alias, IP address, host name, MAC address, device id, or a unique alias
+prefix. Every command takes `--json`; `--backend <name>` restricts it to one adapter.
 
-Exit codes: `0` success, `1` error, `2` bad arguments, `3` refused by a safety guard,
-`4` the machine did not come back before `--wait-timeout` expired, `5` a power cycle could
-not switch the outlet back on and the device is still without power.
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Error, such as an unreachable device or a failed login |
+| 2 | Bad arguments |
+| 3 | Refused by a safety guard |
+| 4 | Power was restored, but the machine did not answer before `--wait-timeout` |
+| 5 | A power cycle could not switch the outlet back on. The device is still off |
 
-## Safety model
-
-Cutting power is the one operation that can destroy work or spoil food, so it is gated
-in layers, all enforced in `powerctl.core`, not in the argument parser:
-
-1. **`--yes` is required.** `off` and `cycle` refuse without it. Switching *on* is never
-   gated.
-2. **Protected devices are refused.** `powerctl protect <device>` stores the device's
-   alias, address, MAC and device id. A match on any one of them protects it, so the
-   device stays protected however it is addressed. `--force-protected` overrides this
-   tier.
-3. **Critical devices are refused under every flag.** `powerctl protect <device>
-   --critical` is for a fridge, a router, a server. No command line option lifts it; the
-   entry has to be removed from the protection file by hand.
-4. **Identity is confirmed before power is cut.** A device that is not in the registry is
-   queried first, and the guards run again against the identity it reports. If it cannot
-   be identified, the power cut is refused rather than attempted.
-5. **Protections live in their own file.** `~/.config/powerctl/protected.json` is separate
-   from the device cache, so rebuilding or deleting the cache cannot drop a safety rule.
-6. **`--dry-run`** runs every check and reports the outcome without touching the device,
-   which is the only safe way to verify the guards against real hardware.
-7. **A power cycle always tries to restore power.** If anything fails between switching
-   off and switching on, including an interrupt, the switch-on is retried four times. If
-   power still cannot be restored, the command exits with code 5 and says so plainly
-   rather than reporting a normal result.
-
-Layers 2 to 5 exist because an earlier version matched protections by display name only.
-With the device cache deleted, a protected outlet addressed by its bare IP address did not
-match its own protection and was switched off. `tests/test_core.py` and
-`tests/test_registry.py` contain regression tests for exactly that sequence.
-
-## Credentials
-
-Kasa IOT devices need none. Tapo devices authenticate against a TP-Link account, which is
-the same account for both product lines, so it is stored once under the scope `tplink`.
-
-```bash
-powerctl login --backend tapo     # prompts, never echoes, writes mode 0600
-```
-
-* Or set `POWERCTL_TPLINK_USERNAME` and `POWERCTL_TPLINK_PASSWORD`; the environment wins
-  over the stored file.
-* Passwords are never accepted as command line arguments: process arguments are readable
-  by other local users and end up in shell history.
-* A credential file readable by group or other is rejected rather than used.
-* The device registry holds addressing and protocol data only. Every record passes through
-  `powerctl.secrets.scrub`, and all output passes through a redactor that replaces known
-  secret values with `***`.
-
-`powerctl doctor` reports where credentials come from and flags a file with permissions
-that are too wide. Neither the registry nor the credential file is in this repository, and
-`scripts/check-repo-clean.sh` fails the build if a private IPv4 address, a MAC address, an
-email address, a token, a WiFi name or key, or one of the local state files reaches the
-working tree or any commit in the history. Documentation values (the RFC 5737 example
-ranges, `AA:BB:CC:DD:EE:FF`, `example.com`) are the only ones allowed. `install.sh`
-installs it as a pre-commit hook, and CI runs it over the full history alongside
-gitleaks.
-
-## Power cycling a machine
-
-For hardware that boots when power returns:
+## Rebooting a machine
 
 ```bash
 powerctl cycle <device> --yes \
@@ -144,20 +97,71 @@ powerctl cycle <device> --yes \
 ```
 
 The outlet goes off, stays off for `--off-seconds`, comes back on, and the command then
-polls the machine until it answers. Exit code 4 means power was restored but the machine
-did not return; exit code 5 means power itself could not be restored. A script can tell
-all three outcomes apart. Without `--wait-port`, ICMP is used. Without `--wait-host`, the
-command returns as soon as power is restored.
+polls the machine until it answers. Exit code 4 means power came back but the machine did
+not; exit code 5 means power itself could not be restored, so a script can tell the three
+outcomes apart. Without `--wait-port` the check is ICMP. Without `--wait-host` the command
+returns as soon as power is restored.
+
+## Safety model
+
+Every rule is enforced in `powerctl.core`, not in the argument parser, so a caller using
+the library gets the same guards as the CLI.
+
+1. **`--yes` is required** for `off` and `cycle`. Switching on is never gated.
+2. **Protected devices are refused.** `powerctl protect <device>` records the device's
+   alias, address, MAC and device id; a match on any one of them protects it, so the
+   device stays protected however it is addressed. `--force-protected` overrides this
+   tier.
+3. **Critical devices are refused under every flag.** `powerctl protect <device>
+   --critical` is for a fridge, a router, a server. No option lifts it; the entry has to
+   be removed from the protection file by hand.
+4. **Identity is confirmed first.** A device the registry cannot fully identify is queried
+   before anything is switched, and the guards run again on the identity it reports. A
+   device that cannot be identified is refused rather than switched.
+5. **Protections have their own file.** `~/.config/powerctl/protected.json` is separate
+   from the device cache, so rebuilding or deleting the cache cannot drop a safety rule.
+6. **`--dry-run`** runs every check and reports the outcome without touching the device.
+   It is the only safe way to verify the guards against real hardware.
+7. **A power cycle always tries to restore power.** If anything fails between off and on,
+   including an interrupt, the switch-on is retried four times; if power still cannot be
+   restored the command exits 5 and says so instead of reporting a normal result.
+
+Rules 2 to 5 exist because an earlier version matched protections by display name only.
+With the device cache deleted, a protected outlet addressed by its bare IP address did not
+match its own protection and was switched off. `tests/test_core.py` and
+`tests/test_registry.py` replay that exact sequence.
+
+## Credentials
+
+Kasa IOT devices need no account. Tapo devices authenticate against a TP-Link account,
+which is the same account for both product lines, so it is stored once under the scope
+`tplink`:
+
+```bash
+powerctl login --backend tapo     # prompts, never echoes, writes mode 0600
+```
+
+Alternatively set `POWERCTL_TPLINK_USERNAME` and `POWERCTL_TPLINK_PASSWORD`; the
+environment wins over the stored file.
+
+* Passwords are never accepted as command line arguments, because process arguments are
+  readable by other local users and end up in shell history.
+* A credential file readable by group or other is rejected rather than used.
+* The registry holds addressing and protocol data only. Records pass through
+  `powerctl.secrets.scrub`, and all output passes through a redactor that replaces known
+  secret values with `***`.
+
+`powerctl doctor` reports where credentials come from and flags a file whose permissions
+are too wide.
 
 ## When discovery finds nothing
 
-Discovery is a UDP broadcast; it does not cross subnets and is blocked by routers that
-isolate an IoT or guest network. Probe the address directly, which walks every supported
-protocol:
+Discovery is a UDP broadcast. It does not cross subnets and is blocked by routers that
+isolate an IoT or guest network. Address the device directly instead:
 
 ```bash
-powerctl probe 192.0.2.42          # one address
-powerctl discover --sweep          # every address on the local subnet
+powerctl probe 192.0.2.42           # try every protocol against one address
+powerctl discover --sweep           # probe every address on the local subnet
 powerctl discover --sweep 192.0.2.0/24
 ```
 
@@ -165,53 +169,58 @@ powerctl discover --sweep 192.0.2.0/24
 
 ```
 cli.py        argument parsing and output formatting only
-core.py       actions and every safety rule (guards live here, not in the parser)
+core.py       actions and every safety rule
 registry.py   device cache and the separate protection store
 secrets.py    credential loading, file permissions, redaction
 netutil.py    broadcast detection, subnet sweep, reachability waits
 backends/
-  base.py             Backend interface plus DeviceRecord / DeviceStatus / EnergyReading
+  base.py             Backend interface, DeviceRecord / DeviceStatus / EnergyReading
   kasa_backend.py     Kasa IOT via python-kasa
   tapo_backend.py     Tapo via plugp100
 ```
 
-Adapters are the only vendor-aware code. Each owns its device families exclusively,
-because these devices accept one session at a time and two adapters talking to one outlet
-make it reject both.
+Adapters hold all vendor-specific code, and each owns its device families exclusively:
+these devices accept one session at a time, so two adapters talking to one outlet make it
+reject both.
 
-To add a vendor: subclass `Backend`, implement `discover`, `status`, `switch` (and
+Two adapters rather than one library is deliberate. The Kasa IOT protocol has been stable
+for years, while Tapo firmware keeps changing: recent devices speak TPAP, which no
+python-kasa release supports and plugp100 shipped in 6.0.1. The half of the estate that
+moves fastest therefore depends on the library that releases most often.
+
+To add a vendor, subclass `Backend`, implement `discover`, `status` and `switch` (and
 optionally `probe`), expose `get_backend()`, and add the module to `_LOADERS` in
 `backends/__init__.py`. Adapters are imported lazily, so a missing dependency disables one
-adapter rather than the CLI. Set `credential_scope` when the new devices share an account
-with an existing adapter.
-
-## Continuous integration
-
-Every push runs the suite on Python 3.11 and 3.12, lints and format-checks with ruff,
-smoke tests the command, scans for secrets with gitleaks, and verifies that neither the
-working tree nor any commit in the history contains a private address, MAC address, email
-address, token, WiFi name or local state file. Coverage is gated twice, so it cannot silently fall below 95%:
-
-* `pytest` fails the build below 95% through `--cov-fail-under` in `pyproject.toml`. This
-  works with no external service.
-* Codecov enforces a 95% project target and a 90% patch target from `codecov.yml`.
-
-While the repository is private, the Codecov badge needs the repository's graph token
-appended (`.../graph/badge.svg?token=<graph token>`, found under Settings, Badge in
-Codecov); without it the badge shows "unknown". The badge needs no token once the
-repository is public.
+adapter rather than the whole CLI. Set `credential_scope` when the new devices share an
+account with an existing adapter.
 
 ## Development
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python -e ".[dev]"
-.venv/bin/python -m pytest        # coverage gate: 95%
+.venv/bin/python -m pytest            # coverage gate: 95%
 .venv/bin/ruff check src tests
-./scripts/check-repo-clean.sh     # no private addresses, MACs or local state
+./scripts/check-repo-clean.sh --history
 ```
 
 The suite runs entirely against stub devices: no network traffic, no hardware, and a
 temporary config directory, so it can never switch off anything real.
+
+Every push runs the tests on Python 3.11 and 3.12, lints and format-checks with ruff,
+smoke tests the command, and scans for secrets with gitleaks. Coverage is gated twice, so
+it cannot fall below 95% unnoticed: `pytest --cov-fail-under` fails the build with no
+external service, and Codecov enforces a 95% project and 90% patch target from
+`codecov.yml`.
+
+`scripts/check-repo-clean.sh` keeps the repository publishable. It fails if a private IPv4
+address, a MAC address, an email address, a token, a WiFi name or key, or one of the local
+state files appears in the working tree or, with `--history`, in any commit. Only
+documentation values are allowed: the RFC 5737 ranges, `AA:BB:CC:DD:EE:FF` and
+`example.com`. It runs as a pre-commit hook and in CI over the full history.
+
+While the repository is private, the Codecov badge needs the repository's graph token
+appended (`.../graph/badge.svg?token=<graph token>`, under Settings, Badge in Codecov).
+No token is needed once the repository is public.
 
 ## License
 
