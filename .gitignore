@@ -11,3 +11,4 @@ devices.json
 .coverage
 coverage.xml
 htmlcov/
+protected.json
