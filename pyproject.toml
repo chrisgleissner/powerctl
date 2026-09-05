@@ -39,7 +39,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 # The suite must keep covering the safety logic, so the gate is part of the
 # default run rather than something CI adds on top.
-addopts = "--cov=powerctl --cov-report=term-missing --cov-fail-under=95"
+addopts = "--cov=powerctl --cov-report=term-missing --cov-report=xml --cov-fail-under=95"
 filterwarnings = ["ignore::DeprecationWarning:passlib.*"]
 
 [tool.coverage.run]

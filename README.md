@@ -1,7 +1,7 @@
 # powerctl
 
-[![CI](https://github.com/chrisgleissner/powerctl/actions/workflows/ci.yml/badge.svg)](https://github.com/chrisgleissner/powerctl/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](https://github.com/chrisgleissner/powerctl/actions/workflows/ci.yml)
+[![Build](https://github.com/chrisgleissner/powerctl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chrisgleissner/powerctl/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/chrisgleissner/powerctl/graph/badge.svg)](https://codecov.io/gh/chrisgleissner/powerctl)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](https://www.python.org/)
 [![Ruff](https://img.shields.io/badge/lint-ruff-261230)](https://docs.astral.sh/ruff/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -70,7 +70,8 @@ alias prefix. Every command takes `--json`, and `--backend <name>` restricts it 
 adapter.
 
 Exit codes: `0` success, `1` error, `2` bad arguments, `3` refused by a safety guard,
-`4` the machine did not come back before `--wait-timeout` expired.
+`4` the machine did not come back before `--wait-timeout` expired, `5` a power cycle could
+not switch the outlet back on and the device is still without power.
 
 ## Safety model
 
@@ -93,6 +94,10 @@ in layers, all enforced in `powerctl.core`, not in the argument parser:
    from the device cache, so rebuilding or deleting the cache cannot drop a safety rule.
 6. **`--dry-run`** runs every check and reports the outcome without touching the device,
    which is the only safe way to verify the guards against real hardware.
+7. **A power cycle always tries to restore power.** If anything fails between switching
+   off and switching on, including an interrupt, the switch-on is retried four times. If
+   power still cannot be restored, the command exits with code 5 and says so plainly
+   rather than reporting a normal result.
 
 Layers 2 to 5 exist because an earlier version matched protections by display name only.
 With the device cache deleted, a protected outlet addressed by its bare IP address did not
@@ -133,8 +138,9 @@ powerctl cycle <device> --yes \
 
 The outlet goes off, stays off for `--off-seconds`, comes back on, and the command then
 polls the machine until it answers. Exit code 4 means power was restored but the machine
-did not return, so a script can tell those two outcomes apart. Without `--wait-port`, ICMP
-is used. Without `--wait-host`, the command returns as soon as power is restored.
+did not return; exit code 5 means power itself could not be restored. A script can tell
+all three outcomes apart. Without `--wait-port`, ICMP is used. Without `--wait-host`, the
+command returns as soon as power is restored.
 
 ## When discovery finds nothing
 

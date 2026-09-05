@@ -7,6 +7,7 @@ EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_REFUSED = 3
 EXIT_TIMEOUT = 4
+EXIT_POWER_STILL_OFF = 5
 
 
 class PowerctlError(Exception):
@@ -33,6 +34,16 @@ class RefusedError(PowerctlError):
     """A safety guard refused the requested action."""
 
     exit_code = EXIT_REFUSED
+
+
+class PowerRestoreError(PowerctlError):
+    """A power cycle could not switch the outlet back on.
+
+    This is the worst outcome the tool can produce: the device is left without
+    power. It has its own exit code so a caller can react to it specifically.
+    """
+
+    exit_code = EXIT_POWER_STILL_OFF
 
 
 class WaitTimeout(PowerctlError):

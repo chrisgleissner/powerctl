@@ -17,12 +17,13 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from .backends import get_backend
+from .backends import backend_names, get_backend
 from .backends.base import Backend, DeviceRecord, DeviceStatus
 from .errors import (
     AuthRequired,
     DeviceNotFound,
     PowerctlError,
+    PowerRestoreError,
     RefusedError,
     UsageError,
     WaitTimeout,
@@ -49,6 +50,10 @@ def credential_scope(name: str) -> str:
 
 
 DEFAULT_OFF_SECONDS = 5.0
+
+#: How hard a power cycle tries to restore power before giving up and saying so.
+RESTORE_ATTEMPTS = 4
+RESTORE_BACKOFF_SECONDS = 3.0
 
 
 @dataclass
@@ -86,6 +91,8 @@ class Session:
         if record is not None:
             return record
         if looks_like_host(name):
+            # Unknown address: the adapter is not known yet either. It is
+            # resolved by asking each adapter in turn, see :func:`for_address`.
             return DeviceRecord(backend=backend or DEFAULT_BACKEND, host=name)
         raise DeviceNotFound(
             f"no device called '{name}'; run 'powerctl discover' or pass an IP address"
@@ -298,6 +305,30 @@ def check_switch_allowed(
         )
 
 
+async def for_address(
+    session: Session, record: DeviceRecord, *, backends: list[str] | None = None
+) -> DeviceRecord:
+    """Find which adapter owns an address that is not in the registry.
+
+    Every adapter is asked in turn. Without this, an address typed on the command
+    line would always go to the default adapter, and a device belonging to
+    another one would look unreachable.
+    """
+    if session.registry.find(record.host) is not None or record.mac:
+        return record
+    names = backends or backend_names()
+    for name in names:
+        try:
+            found = await session.backend(name).probe(
+                record.host, credentials=session.credentials(name)
+            )
+        except (NotImplementedError, PowerctlError):
+            continue
+        if found is not None:
+            return found
+    return record
+
+
 async def identify(
     session: Session, record: DeviceRecord, *, child: str | None = None
 ) -> DeviceRecord:
@@ -311,9 +342,14 @@ async def identify(
     """
     if record.mac and record.alias:
         return record
+    record = await for_address(session, record)
+    if record.mac and record.alias:
+        return record
     try:
+        # Always identify the outlet itself, never one socket of it: protections
+        # are keyed on the identity of the device that holds the relay.
         status = await session.backend(record.backend).status(
-            record, credentials=session.credentials(record.backend), child=child
+            record, credentials=session.credentials(record.backend)
         )
     except PowerctlError as exc:
         # Fail closed: an unidentified device may be a protected one under an
@@ -454,10 +490,33 @@ async def cycle(
     off_status = await device_backend.switch(record, on=False, credentials=creds, child=child)
     note("power_off", state="on" if off_status.is_on else "off")
 
-    await asyncio.sleep(off_seconds)
-    note("waited", seconds=off_seconds)
-
-    on_status = await device_backend.switch(record, on=True, credentials=creds, child=child)
+    # Once power is off, restoring it is the only acceptable outcome. Anything
+    # that goes wrong from here is retried, and a failure to restore is raised
+    # loudly rather than returned as a normal result.
+    try:
+        await asyncio.sleep(off_seconds)
+        note("waited", seconds=off_seconds)
+    finally:
+        on_status = None
+        errors: list[str] = []
+        for attempt in range(RESTORE_ATTEMPTS):
+            try:
+                on_status = await device_backend.switch(
+                    record, on=True, credentials=creds, child=child
+                )
+                break
+            except Exception as exc:  # reported in the events, then retried
+                errors.append(str(exc))
+                note("power_on_failed", attempt=attempt + 1, error=str(exc))
+                if attempt < RESTORE_ATTEMPTS - 1:
+                    await asyncio.sleep(RESTORE_BACKOFF_SECONDS)
+        if on_status is None:
+            raise PowerRestoreError(
+                f"POWER IS STILL OFF for '{label}' ({record.host}): "
+                f"{RESTORE_ATTEMPTS} attempts to switch it back on failed "
+                f"({'; '.join(errors)}). Switch it on manually, or run "
+                f"'powerctl on {record.alias or record.host}'."
+            )
     note("power_on", state="on" if on_status.is_on else "off")
     result.final_state = "on" if on_status.is_on else "off"
 

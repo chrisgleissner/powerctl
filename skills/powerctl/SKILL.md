@@ -136,6 +136,7 @@ Report afterwards: the events list with timestamps, `final_state`, and `wait_sec
 | 2 | Bad arguments |
 | 3 | Refused by a safety guard: `--yes` missing, the device is protected or critical, or it could not be identified |
 | 4 | Power was restored, but `--wait-host` did not answer before the timeout |
+| 5 | The power cycle could not switch the outlet back on. The device is still without power: tell the user immediately and run `powerctl on <device>` |
 
 Code 3 is never something to work around. Report it and ask the user what to do.
 

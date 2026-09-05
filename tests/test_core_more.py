@@ -174,3 +174,86 @@ async def test_cycle_can_report_a_timeout_without_failing(session, fake_backend,
 async def test_resolve_rejects_a_name_that_is_not_a_device(session):
     with pytest.raises(DeviceNotFound, match="no device called"):
         session.resolve("not a device")
+
+
+# A power cycle that cannot switch the outlet back on is the worst outcome this
+# tool can produce, so it retries and then says so unmistakably.
+
+
+async def test_cycle_retries_until_power_is_restored(session, fake_backend, monkeypatch):
+    session.registry.upsert(DeviceRecord(backend="fake", host="192.0.2.10", alias="Lab Plug"))
+    attempts = {"count": 0}
+    original = fake_backend.switch
+
+    async def flaky_switch(record, *, on, credentials, child=None):
+        if on:
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise PowerctlError("device did not answer")
+        return await original(record, on=on, credentials=credentials, child=child)
+
+    monkeypatch.setattr(fake_backend, "switch", flaky_switch)
+    monkeypatch.setattr(core, "RESTORE_BACKOFF_SECONDS", 0)
+    result = await core.cycle(session, "Lab Plug", backend="fake", confirmed=True, off_seconds=0)
+    assert result.final_state == "on"
+    assert attempts["count"] == 3
+    assert any(event["step"] == "power_on_failed" for event in result.events)
+
+
+async def test_cycle_raises_loudly_when_power_cannot_be_restored(
+    session, fake_backend, monkeypatch
+):
+    from powerctl.errors import EXIT_POWER_STILL_OFF, PowerRestoreError
+
+    session.registry.upsert(DeviceRecord(backend="fake", host="192.0.2.10", alias="Lab Plug"))
+    original = fake_backend.switch
+
+    async def never_switches_on(record, *, on, credentials, child=None):
+        if on:
+            raise PowerctlError("device did not answer")
+        return await original(record, on=on, credentials=credentials, child=child)
+
+    monkeypatch.setattr(fake_backend, "switch", never_switches_on)
+    monkeypatch.setattr(core, "RESTORE_BACKOFF_SECONDS", 0)
+    with pytest.raises(PowerRestoreError, match="POWER IS STILL OFF") as raised:
+        await core.cycle(session, "Lab Plug", backend="fake", confirmed=True, off_seconds=0)
+    assert raised.value.exit_code == EXIT_POWER_STILL_OFF
+
+
+async def test_cycle_restores_power_even_if_the_wait_is_interrupted(
+    session, fake_backend, monkeypatch
+):
+    session.registry.upsert(DeviceRecord(backend="fake", host="192.0.2.10", alias="Lab Plug"))
+
+    async def interrupted_sleep(seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(core.asyncio, "sleep", interrupted_sleep)
+    with pytest.raises(KeyboardInterrupt):
+        await core.cycle(session, "Lab Plug", backend="fake", confirmed=True, off_seconds=1)
+    # The outlet must not be left off because the wait was interrupted.
+    assert fake_backend.state["192.0.2.10"] is True
+
+
+async def test_an_unknown_address_is_offered_to_every_adapter(session, fake_backend):
+    record = DeviceRecord(backend="kasa", host="192.0.2.10")
+    found = await core.for_address(session, record, backends=["fake"])
+    assert found.alias == "Lab Plug"
+    assert found.backend == "fake"
+
+
+async def test_a_known_device_is_not_probed_again(session, fake_backend):
+    session.registry.upsert(
+        DeviceRecord(backend="fake", host="192.0.2.10", alias="Lab Plug", mac="AA:BB:CC:DD:EE:FF")
+    )
+    record = session.registry.find("Lab Plug")
+    assert await core.for_address(session, record, backends=["fake"]) is record
+
+
+async def test_identification_uses_the_outlet_not_the_socket(session, fake_backend):
+    session.registry.devices = []
+    record = DeviceRecord(backend="fake", host="192.0.2.10")
+    await core.identify(session, record, child="Left")
+    # The status call that identifies the device must not be scoped to a socket.
+    identifying = [call for call in fake_backend.calls if call[0] == "status"]
+    assert identifying and identifying[-1][2] == "None"
